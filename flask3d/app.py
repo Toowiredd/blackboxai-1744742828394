@@ -1,7 +1,7 @@
 import eventlet
 eventlet.monkey_patch()
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import logging
@@ -20,12 +20,49 @@ app.config['DEBUG'] = True
 
 # Enable CORS for all routes
 CORS(app, resources={
-    r"/api/*": {
+    r"/*": {
         "origins": "*",
         "allow_headers": ["Content-Type"],
-        "methods": ["GET", "POST", "OPTIONS"]
+        "methods": ["GET", "POST", "OPTIONS"],
+        "expose_headers": ["Content-Type"]
     }
 })
+
+# Configure static files with proper MIME types
+@app.after_request
+def add_header(response):
+    if response.mimetype == 'application/javascript':
+        response.headers['Content-Type'] = 'application/javascript; charset=utf-8'
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+# Serve JavaScript modules with proper MIME type
+@app.route('/static/js/<path:filename>')
+def serve_js(filename):
+    logger.info(f"Serving JavaScript file: {filename}")
+    response = send_from_directory('static/js', filename)
+    if filename.endswith('.js'):
+        response.headers['Content-Type'] = 'application/javascript; charset=utf-8'
+    return response
+
+# Debug route to check module loading
+@app.route('/debug/modules')
+def debug_modules():
+    """List all available JavaScript modules."""
+    js_dir = os.path.join(app.static_folder, 'js')
+    files = []
+    for file in os.listdir(js_dir):
+        if file.endswith('.js'):
+            with open(os.path.join(js_dir, file), 'r') as f:
+                content = f.read()
+                files.append({
+                    'name': file,
+                    'size': len(content),
+                    'imports': [line for line in content.split('\n') if line.startswith('import')]
+                })
+    return jsonify(files)
 
 # Initialize SocketIO with eventlet and CORS
 socketio = SocketIO(
@@ -140,5 +177,23 @@ def internal_error(error):
     return jsonify({'error': 'Internal server error', 'message': 'An unexpected error occurred'}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, debug=True, host='0.0.0.0', port=port)
+    try:
+        # Get port from environment or use default
+        port = int(os.environ.get('PORT', 5000))
+        
+        # Log startup information
+        logger.info(f"Starting server on port {port}")
+        logger.info(f"SocketIO async mode: {socketio.async_mode}")
+        logger.info(f"Debug mode: {app.debug}")
+        
+        # Create eventlet WSGI server
+        eventlet.wsgi.server(
+            eventlet.listen(('0.0.0.0', port)),
+            app,
+            log_output=True,
+            debug=app.debug,
+            log=logger
+        )
+    except Exception as e:
+        logger.error(f"Failed to start server: {str(e)}")
+        raise
