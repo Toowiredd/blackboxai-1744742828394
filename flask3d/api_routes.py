@@ -26,6 +26,12 @@ def update_button_config():
         if not data or 'id' not in data:
             return jsonify({'status': 'error', 'message': 'Invalid button config data'}), 400
 
+        required_fields = ['position', 'rotation', 'scale']
+        for field in required_fields:
+            if field not in data:
+                data[field] = {'x': 0, 'y': 0, 'z': 0} if field != 'scale' else 1
+                current_app.logger.warning(f"Missing {field} in button config, using default")
+
         config = load_button_config()
         config[data['id']] = data
 
