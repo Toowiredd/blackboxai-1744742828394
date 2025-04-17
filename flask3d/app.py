@@ -4,8 +4,10 @@ eventlet.monkey_patch()
 from flask import Flask, render_template, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import logging
 import os
+import subprocess
 
 # Configure logging
 logging.basicConfig(
@@ -77,6 +79,18 @@ socketio = SocketIO(
     async_handlers=True
 )
 
+# Initialize Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+class User(UserMixin):
+    def __init__(self, id):
+        self.id = id
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User(user_id)
+
 @socketio.on_error()
 def error_handler(e):
     """Handle all socket.io errors."""
@@ -88,7 +102,28 @@ def index():
     """Serve the main 3D environment page."""
     return render_template('index.html')
 
+@app.route('/login', methods=['POST'])
+def login():
+    """Handle user login."""
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    # TODO: Implement proper authentication
+    if username == 'admin' and password == 'password':
+        user = User(id=1)
+        login_user(user)
+        return jsonify({'status': 'success'})
+    return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
+
+@app.route('/logout', methods=['POST'])
+@login_required
+def logout():
+    """Handle user logout."""
+    logout_user()
+    return jsonify({'status': 'success'})
+
 @app.route('/api/button/config', methods=['POST'])
+@login_required
 def update_button_config():
     """Update button configuration."""
     try:
@@ -113,14 +148,28 @@ def update_button_config():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/browser/capture', methods=['POST'])
+@login_required
 def capture_browser():
     """Capture headless browser content."""
     try:
         data = request.get_json()
         url = data.get('url')
-        # TODO: Implement headless browser capture
-        logger.info(f"Capturing content from URL: {url}")
-        return jsonify({'status': 'success', 'url': url})
+        if not url:
+            raise ValueError('URL is required for browser capture')
+        
+        # Use Puppeteer to capture the browser content
+        result = subprocess.run(['node', 'capture.js', url], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to capture browser content: {result.stderr}")
+        
+        logger.info(f"Captured content from URL: {url}")
+        return jsonify({'status': 'success', 'content': result.stdout})
+    except ValueError as e:
+        logger.error(f"Validation error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except RuntimeError as e:
+        logger.error(f"Runtime error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     except Exception as e:
         logger.error(f"Error capturing browser content: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
